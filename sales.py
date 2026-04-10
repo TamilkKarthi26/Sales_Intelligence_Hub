@@ -300,57 +300,76 @@ def add_sales():
 # ------------------------------ 
 def add_payment():
     st.title("💰 Add Payment")
+
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
-    if st.session_state['Role'] == 'Super Admin':
-        cursor.execute("SELECT Sale_Id, Name, Product_Name FROM sales")
-    else:
-        cursor.execute("SELECT Sale_Id, Name, Product_Name FROM sales WHERE Branch_Id=%s",
-                       (st.session_state['Branch_Id'],))
-
+    cursor.execute("SELECT Sale_Id, Name FROM sales")
     sales = cursor.fetchall()
     conn.close()
 
     if not sales:
-        st.warning("No sales available")
+        st.warning("No sales found")
         return
 
-    options = {f"{s['Sale_Id']} - {s['Name']}": s for s in sales}
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    selected_key = st.selectbox("Select Sale", list(options.keys()))
-    selected_sale = options[selected_key]
+    options = {f"{s['Sale_Id']} - {s['Name']}": s['Sale_Id'] for s in sales}
+    selected = st.selectbox("Select Sale", list(options.keys()))
+    sale_id = options[selected]
 
-    st.text_input("Product Name", value=selected_sale['Product_Name'], disabled=True)
     payment = st.number_input("Payment Amount", min_value=0.0)
-    method = st.selectbox("Payment Method", ["Cash", "UPI", "Card"])
+    method = st.selectbox("Method", ["Cash","UPI","Card"])
 
     if st.button("Add Payment"):
         conn = get_db_connection()
-        cursor = conn.cursor()
+        cursor = conn.cursor(dictionary=True)
 
-        # Insert payment record
+        
         cursor.execute(
-            "INSERT INTO payment_splits (Sale_Id, Payment_Date, Amount_Paid, Payment_Method) VALUES (%s,NOW(),%s,%s)",
-            (selected_sale['Sale_Id'], payment, method)
+            "SELECT Gross_Sales, Received_Amount FROM sales WHERE Sale_Id=%s",
+            (sale_id,)
         )
+        sale = cursor.fetchone()
 
-        # Update sale received amount and status
-        cursor.execute(
-            "UPDATE sales SET Received_Amount = Received_Amount + %s WHERE Sale_Id=%s",
-            (payment, selected_sale['Sale_Id'])
-        )
-        cursor.execute(
-            "UPDATE sales SET Status = CASE WHEN Gross_Sales = Received_Amount THEN 'Close' ELSE 'Open' END WHERE Sale_Id=%s",
-            (selected_sale['Sale_Id'],)
-        )
+        gross = sale['Gross_Sales']
+        received = sale['Received_Amount']
+        remaining = gross - received
 
-        conn.commit()
-        conn.close()
+        
+        if payment > remaining:
+            st.error("❌ Please check the amount")
 
-        st.success(f"Payment of ₹{payment:,.2f} added via {method} ✅")
+        elif payment <= 0:
+            st.warning("Enter valid amount")
 
-    st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            
+            cursor.execute("""
+            INSERT INTO payment_splits
+            (Sale_Id, Payment_Date, Amount_Paid, Payment_Method)
+            VALUES (%s,NOW(),%s,%s)
+            """, (sale_id, payment, method))
+
+            
+            cursor.execute("""
+            UPDATE sales 
+            SET Received_Amount = Received_Amount + %s
+            WHERE Sale_Id=%s
+            """, (payment, sale_id))
+
+            
+            cursor.execute("""
+            UPDATE sales
+            SET Status = CASE 
+                WHEN Gross_Sales = Received_Amount + %s THEN 'Close'
+                ELSE 'Open'
+            END
+            WHERE Sale_Id=%s
+            """, (payment, sale_id))
+
+            conn.commit()
+            conn.close()
+
+            st.success("Payment added successfully")
 
 # ------------------------------ 
 def main():
@@ -362,7 +381,7 @@ def main():
             for key in ['logged_in', 'Role', 'username', 'Branch_Id', 'show_query', 'page']:
                 st.session_state[key] = None
 
-        # Navigation radio
+        
         nav_option = st.sidebar.radio(
             "Go to",
             ["📊 Dashboard", "➕ Add Sales", "💰 Add Payment"],
@@ -379,6 +398,6 @@ def main():
     else:
         login()
 
-# ------------------------------ RUN
+# ------------------------------ 
 if __name__ == "__main__":
     main()
